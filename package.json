@@ -1,0 +1,23 @@
+{
+  "name": "metamaster",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "madebynoxc",
+  "license": "ISC",
+  "packageManager": "pnpm@10.6.1",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "form-data": "^4.0.2",
+    "graphql": "^16.10.0",
+    "graphql-request": "^7.1.2",
+    "node-fetch": "^3.3.2",
+    "sagiri": "^4.3.0"
+  }
+}
