@@ -3,6 +3,8 @@ import fs from 'fs';
 import FormData from 'form-data';
 import sagiri from 'sagiri';
 import dotenv from 'dotenv';
+import yargs from 'yargs/yargs';
+import { hideBin } from 'yargs/helpers';
 import { gql, GraphQLClient } from 'graphql-request';
 
 dotenv.config();
@@ -20,7 +22,9 @@ const DANBOORU_URL = process.env.DANBOORU_URL;
 const DANBOORU_LOGIN = process.env.DANBOORU_LOGIN;
 const DANBOORU_KEY = process.env.DANBOORU_KEY;
 
-const TAG = 'tagme';
+const DEFAULT_TAG = 'tagme';
+
+const argv = yargs(hideBin(process.argv)).argv
 
 const sagiriClient = sagiri(SAUCENAO_API_KEY, {
     results: 5,
@@ -51,6 +55,8 @@ async function fetchImageWithTag(tag) {
             posts(limit: 1, offset: 0, tags: "${tag}") {
                 id
                 post_id
+                tags
+                source
                 hash
                 ext
                 image_link
@@ -96,29 +102,46 @@ async function fetchDanbooruMetadata(url) {
     return response.json();
 }
 
-async function updateWithDanbooru(post_id, metadata) {
+async function updateWithDanbooru(image, metadata, overrideSource) {
     const charTags = metadata.tag_string_character.split(' ').filter(Boolean).map(tag => `character:${tag}`);
     const artistTags = metadata.tag_string_artist.split(' ').filter(Boolean).map(tag => `artist:${tag}`);
     const metaTags = metadata.tag_string_meta.split(' ').filter(Boolean).map(tag => `meta:${tag}`);
     const seriesTags = metadata.tag_string_copyright.split(' ').filter(Boolean).map(tag => `series:${tag}`);
     const generalTags = metadata.tag_string_general.split(' ').filter(Boolean);
-    const tags = [...charTags, ...artistTags, ...metaTags, ...seriesTags, ...generalTags, 'meta:danbooru'].join(' ');
+    const tags = [...charTags, ...artistTags, ...metaTags, ...seriesTags, ...generalTags, 'meta:danbooru'];
     const source = metadata.source;
     const rating = metadata.rating;
 
-    return await updateImageMetadata(post_id, tags, source, rating);
+    return await updateImageMetadata(image, tags, source, rating, overrideSource);
 }
 
-async function updateImageMetadata(post_id, tags, source, rating) {
+async function updateImageMetadata(image, tags, source, rating, overrideSource) {
+    const post_id = image.post_id;
+    const metadata = [{
+        key: 'tags',
+        value: `${[...tags, ...image.tags].join(' ')} meta:metamaster`
+    }];
+
+    if (!image.source || overrideSource)
+    {
+        metadata.push({
+            key: 'source',
+            value: source
+        });
+    }
+
+    if (rating && rating !== '?') {
+        metadata.push({
+            key: 'rating',
+            value: rating
+        });
+    }
+
     const mutation = gql`
         mutation {
             update_post_metadata(
                 post_id: ${post_id}, 
-                metadata: [
-                    {key: "tags", value: "${tags} meta:metamaster"},
-                    {key: "source", value: "${source}"},
-                    {key: "rating", value: "${rating}"}
-                ]
+                metadata: ${JSON.stringify(metadata).replace(/"([^"]+)":/g, '$1:')}
             ) {
                 id
                 tags
@@ -130,14 +153,15 @@ async function updateImageMetadata(post_id, tags, source, rating) {
     return await graphqlClient.request(mutation);
 }
 
-async function setNotFoundMetadata(post_id, chibisafeUrl) {
+async function setNotFoundMetadata(image, publicUrl) {
+    const post_id = image.post_id;
     const mutation = gql`
         mutation {
             update_post_metadata(
                 post_id: ${post_id}, 
                 metadata: [
                     {key: "tags", value: "meta:unknown"},
-                    {key: "source", value: "${chibisafeUrl}"},
+                    {key: "source", value: "${publicUrl}"},
                 ]
             ) {
                 id
@@ -157,10 +181,15 @@ function getSiteName(reverseSearchResult)
 
 (async () => {
     try {
-        const check = await fetchImageWithTag(TAG);
+        const tag = argv.tag || DEFAULT_TAG;
+        const append = argv.append || false;
+        const upload = argv.upload || true;
+        const overrideSource = !append;
+
+        const check = await fetchImageWithTag(tag);
 
         if (!check) {
-            console.log('No images found with the tag:', TAG);
+            console.log('No images found with the tag:', tag);
             return;
         }
 
@@ -174,24 +203,29 @@ function getSiteName(reverseSearchResult)
         while (true) {
             try {
                 console.log('-'.repeat(20));
-                const image = await fetchImageWithTag(TAG);
+                const image = await fetchImageWithTag(tag);
 
                 if (!image) {
-                    console.log('No more images to process.');
+                    console.log('No more images to process with tag', tag);
                     break;
                 }
                 
                 console.log('Image fetched:', image.id);
                 const tempImagePath = `/tmp/${image.hash}.${image.ext}`;
                 const url = `${SHIMMIE_ENDPOINT}${image.image_link}`;
+                image.tags = append? image.tags.filter(t => t !== DEFAULT_TAG) : [];
+                
+                let publicUrl = url;
+                if (upload) {
+                    await downloadImage(url, tempImagePath);
+                    console.log('Image downloaded successfully:', tempImagePath);
 
-                await downloadImage(url, tempImagePath);
-                console.log('Image downloaded successfully:', tempImagePath);
+                    const chibisafeUrl = await uploadToChibisafe(tempImagePath);
+                    console.log('Image uploaded to Chibisafe:', chibisafeUrl);
+                    publicUrl = chibisafeUrl;
+                }
 
-                const chibisafeUrl = await uploadToChibisafe(tempImagePath);
-                console.log('Image uploaded to Chibisafe:', chibisafeUrl);
-
-                const reverseSearchResults = await reverseSearchImage(chibisafeUrl);
+                const reverseSearchResults = await reverseSearchImage(publicUrl);
                 const danbooruResult = reverseSearchResults.find(result => result.index === 9 && result.similarity > 80);
                 if (danbooruResult) {
                     console.log('Reverse search result:', danbooruResult.url);
@@ -199,7 +233,7 @@ function getSiteName(reverseSearchResult)
                     const metadata = await fetchDanbooruMetadata(danbooruResult.url);
                     console.log('Danbooru post id:', metadata.id);
 
-                    const mutationResult = await updateWithDanbooru(image.post_id, metadata);
+                    const mutationResult = await updateWithDanbooru(image, metadata, overrideSource);
                     const newMeta = mutationResult.update_post_metadata;
                     console.log(`Image metadata updated successfully. 
                         Tags: ${newMeta.tags.length}, 
@@ -212,7 +246,8 @@ function getSiteName(reverseSearchResult)
                     if (resultWithAuthor)
                     {
                         site = getSiteName(resultWithAuthor);
-                        updateImageMetadata(image.post_id, `artist:${resultWithAuthor.authorName} meta:${site}`, resultWithAuthor.url, '?');
+                        const authorName = resultWithAuthor.authorName.replace(/ /g, '_');
+                        await updateImageMetadata(image, [`artist:${authorName}`, `meta:${site}`], resultWithAuthor.url, '?', overrideSource);
                         console.log('Image metadata updated with external link and author.');
                     }
                     else {
@@ -220,11 +255,11 @@ function getSiteName(reverseSearchResult)
                         if (simpleResult)
                         {
                             site = getSiteName(simpleResult);
-                            updateImageMetadata(image.post_id, `meta:${site}`, simpleResult.url, '?');
+                            await updateImageMetadata(image, [`meta:${site}`], simpleResult.url, '?', overrideSource);
                             console.log('Image metadata updated with external link.');
                         }
                         else {
-                            await setNotFoundMetadata(image.post_id, chibisafeUrl);
+                            await setNotFoundMetadata(image, publicUrl);
                             console.log('Image metadata updated with not found status.');
                         }
                     }
@@ -238,7 +273,7 @@ function getSiteName(reverseSearchResult)
                 console.error('Error:', error);
 
                 subsequentErrors++;
-                if (subsequentErrors > 3) {
+                if (subsequentErrors >= 3) {
                     console.error('Too many subsequent errors. Please check the logs above for more information. Exiting...');
                     break;
                 }
