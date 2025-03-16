@@ -20,6 +20,8 @@ const DANBOORU_URL = process.env.DANBOORU_URL;
 const DANBOORU_LOGIN = process.env.DANBOORU_LOGIN;
 const DANBOORU_KEY = process.env.DANBOORU_KEY;
 
+const TAG = 'tagme';
+
 const sagiriClient = sagiri(SAUCENAO_API_KEY, {
     results: 5,
 });
@@ -155,6 +157,13 @@ function getSiteName(reverseSearchResult)
 
 (async () => {
     try {
+        const check = await fetchImageWithTag(TAG);
+
+        if (!check) {
+            console.log('No images found with the tag:', TAG);
+            return;
+        }
+
         const authResult = await gqlAuth();
         console.log('Logged in as:', authResult.login.user.name);
 
@@ -165,14 +174,14 @@ function getSiteName(reverseSearchResult)
         while (true) {
             try {
                 console.log('-'.repeat(20));
-                const image = await fetchImageWithTag('tagme');
-                console.log('Image fetched:', image.id);
+                const image = await fetchImageWithTag(TAG);
 
                 if (!image) {
                     console.log('No more images to process.');
                     break;
                 }
-
+                
+                console.log('Image fetched:', image.id);
                 const tempImagePath = `/tmp/${image.hash}.${image.ext}`;
                 const url = `${SHIMMIE_ENDPOINT}${image.image_link}`;
 
