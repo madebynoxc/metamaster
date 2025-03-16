@@ -95,11 +95,11 @@ async function fetchDanbooruMetadata(url) {
 }
 
 async function updateWithDanbooru(post_id, metadata) {
-    const charTags = metadata.tag_string_character.split(' ').map(tag => `character:${tag}`);
-    const artistTags = metadata.tag_string_artist.split(' ').map(tag => `artist:${tag}`);
-    const metaTags = metadata.tag_string_meta.split(' ').map(tag => `meta:${tag}`);
-    const seriesTags = metadata.tag_string_copyright.split(' ').map(tag => `series:${tag}`);
-    const generalTags = metadata.tag_string_general.split(' ');
+    const charTags = metadata.tag_string_character.split(' ').filter(Boolean).map(tag => `character:${tag}`);
+    const artistTags = metadata.tag_string_artist.split(' ').filter(Boolean).map(tag => `artist:${tag}`);
+    const metaTags = metadata.tag_string_meta.split(' ').filter(Boolean).map(tag => `meta:${tag}`);
+    const seriesTags = metadata.tag_string_copyright.split(' ').filter(Boolean).map(tag => `series:${tag}`);
+    const generalTags = metadata.tag_string_general.split(' ').filter(Boolean);
     const tags = [...charTags, ...artistTags, ...metaTags, ...seriesTags, ...generalTags, 'meta:danbooru'].join(' ');
     const source = metadata.source;
     const rating = metadata.rating;
