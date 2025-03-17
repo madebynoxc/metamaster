@@ -23,6 +23,8 @@ const DANBOORU_LOGIN = process.env.DANBOORU_LOGIN;
 const DANBOORU_KEY = process.env.DANBOORU_KEY;
 
 const DEFAULT_TAG = 'tagme';
+const MAX_SIMILARITY = 80;
+const MIN_SIMILARITY = 40;
 
 const argv = yargs(hideBin(process.argv)).argv
 
@@ -235,32 +237,38 @@ function getSiteName(reverseSearchResult)
 
                     const mutationResult = await updateWithDanbooru(image, metadata, overrideSource);
                     const newMeta = mutationResult.update_post_metadata;
-                    console.log(`Image metadata updated successfully. 
+                    console.log(`[DANBOORU] Image metadata updated successfully. 
                         Tags: ${newMeta.tags.length}, 
                         Source: ${newMeta.source}`);
                 } else {
                     console.log('No Danbooru match found. Attepmting to set basic metadata...');
                     
                     let site = '';
-                    const resultWithAuthor = reverseSearchResults.find(result => result.similarity > 80 && result.authorName != null);
+                    const resultWithAuthor = reverseSearchResults.find(result => result.similarity > MAX_SIMILARITY && result.authorName != null);
                     if (resultWithAuthor)
                     {
                         site = getSiteName(resultWithAuthor);
-                        const authorName = resultWithAuthor.authorName.replace(/ /g, '_');
+                        const authorName = resultWithAuthor.authorName.replace(/[`~!@#$%^&*()_|+\-=?;:'",.<>/{\}\\[\]\/]/gi, '').replace(/ /g, '_');
                         await updateImageMetadata(image, [`artist:${authorName}`, `meta:${site}`], resultWithAuthor.url, '?', overrideSource);
-                        console.log('Image metadata updated with external link and author.');
+                        console.log(`[EXT + AUTHOR] Image metadata updated with external link (${site}) and author (${authorName}).`);
                     }
                     else {
-                        const simpleResult = reverseSearchResults.find(result => result.similarity > 80);
+                        const simpleResult = reverseSearchResults.find(result => result.similarity > MAX_SIMILARITY);
                         if (simpleResult)
                         {
                             site = getSiteName(simpleResult);
                             await updateImageMetadata(image, [`meta:${site}`], simpleResult.url, '?', overrideSource);
-                            console.log('Image metadata updated with external link.');
+                            console.log(`[EXT] Image metadata updated with external link (${site}).`);
                         }
                         else {
                             await setNotFoundMetadata(image, publicUrl);
-                            console.log('Image metadata updated with not found status.');
+                            console.log('[NOT FOUND] Image metadata updated with not found status.');
+                            
+                            const lowSimilarity = reverseSearchResults.find(result => result.similarity > MIN_SIMILARITY);
+                            if (lowSimilarity)
+                            {
+                                console.log('Low similarity result:', lowSimilarity.url);
+                            }
                         }
                     }
                 }
