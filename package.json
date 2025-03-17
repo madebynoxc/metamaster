@@ -19,6 +19,7 @@
     "graphql-request": "^7.1.2",
     "node-fetch": "^3.3.2",
     "sagiri": "^4.3.0",
+    "sharp": "^0.33.5",
     "yargs": "^17.7.2"
   }
 }

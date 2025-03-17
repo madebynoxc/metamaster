@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import yargs from 'yargs/yargs';
 import { hideBin } from 'yargs/helpers';
 import { gql, GraphQLClient } from 'graphql-request';
+import sharp from 'sharp';
 
 dotenv.config();
 const SAUCENAO_API_KEY = process.env.SAUCENAO_API_KEY;
@@ -70,10 +71,21 @@ async function fetchImageWithTag(tag) {
     return data.posts[0];
 }
 
-async function downloadImage(url, path) {
+async function downloadImage(url, path, compress) {
     const response = await fetch(url);
     const arrayBuffer = await response.arrayBuffer();
-    fs.writeFileSync(path, Buffer.from(arrayBuffer));
+    let buffer;
+
+    if (compress) {
+        buffer = await sharp(arrayBuffer)
+            .toFormat('webp', { quality: 90 })
+            .toBuffer();
+    }
+    else {
+        buffer = Buffer.from(arrayBuffer);
+    }
+    
+    fs.writeFileSync(path, buffer);
 }
 
 async function uploadToChibisafe(filePath) {
@@ -185,7 +197,8 @@ function getSiteName(reverseSearchResult)
     try {
         const tag = argv.tag || DEFAULT_TAG;
         const append = argv.append || false;
-        const upload = argv.upload || true;
+        const upload = argv.upload || false;
+        const compress = argv.compress || false;
         const overrideSource = !append;
 
         const check = await fetchImageWithTag(tag);
@@ -213,13 +226,14 @@ function getSiteName(reverseSearchResult)
                 }
                 
                 console.log('Image fetched:', image.id);
-                const tempImagePath = `/tmp/${image.hash}.${image.ext}`;
+                const ext = compress? 'webp' : image.ext;
+                const tempImagePath = `/tmp/${image.hash}.${ext}`;
                 const url = `${SHIMMIE_ENDPOINT}${image.image_link}`;
                 image.tags = append? image.tags.filter(t => t !== DEFAULT_TAG) : [];
                 
                 let publicUrl = url;
                 if (upload) {
-                    await downloadImage(url, tempImagePath);
+                    await downloadImage(url, tempImagePath, compress);
                     console.log('Image downloaded successfully:', tempImagePath);
 
                     const chibisafeUrl = await uploadToChibisafe(tempImagePath);
