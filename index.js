@@ -74,7 +74,8 @@ async function downloadImage(url, path, compress) {
 
     if (compress) {
         buffer = await sharp(arrayBuffer)
-            .toFormat('webp', { quality: 90 })
+            .removeAlpha()
+            .toFormat('webp', { quality: 80 })
             .toBuffer();
     }
     else {
@@ -101,15 +102,11 @@ async function uploadToChibisafe(filePath) {
     return data.url;
 }
 
-async function reverseSearchImage(url) {
-    return await sagiriClient(url);
-}
-
-async function updateImageMetadata(image, tags, source, rating, overrideSource) {
+async function updateImageMetadata(image, tags, source, rating, overrideSource, searchTag) {
     const post_id = image.post_id;
     const metadata = [{
         key: 'tags',
-        value: `${[...tags, ...image.tags].join(' ')} meta:metamaster`
+        value: `${[...tags, ...image.tags].filter(t => t != searchTag).join(' ')} meta:metamaster`
     }];
 
     if (!image.source || overrideSource)
@@ -143,15 +140,17 @@ async function updateImageMetadata(image, tags, source, rating, overrideSource) 
     return await graphqlClient.request(mutation);
 }
 
-async function setNotFoundMetadata(image, publicUrl) {
+async function setNotFoundMetadata(image, publicUrl, searchTag, markUnknown) {
     const post_id = image.post_id;
+    const source = image.source || publicUrl;
+    const tags = image.tags.filter(t => t != searchTag);
     const mutation = gql`
         mutation {
             update_post_metadata(
                 post_id: ${post_id}, 
                 metadata: [
-                    {key: "tags", value: "meta:unknown"},
-                    {key: "source", value: "${publicUrl}"},
+                    {key: "tags", value: "${tags.join(' ')} ${markUnknown? 'meta:unknown' : ''} meta:metamaster"},
+                    {key: "source", value: "${source}"},
                 ]
             ) {
                 id
@@ -166,21 +165,26 @@ async function setNotFoundMetadata(image, publicUrl) {
 
 function getSiteName(reverseSearchResult)
 {
-    return reverseSearchResult.site.replace('.', '_').toLowerCase();
+    return reverseSearchResult.site.replace('.', '_').replace(/ /g, '_').toLowerCase();
 }
 
 (async () => {
     try {
-        const tag = argv.tag || DEFAULT_TAG;
+        const searchTag = argv.tag || DEFAULT_TAG;
+        const addTags = argv.add?.split(' ') || [];
         const append = argv.append || false;
         const upload = argv.upload || false;
         const compress = argv.compress || false;
-        const overrideSource = true;
+        const overrideSource = argv.overrideSource || false;
+        const markUnknown = argv.markUnknown || false;
 
-        const check = await fetchImageWithTag(tag);
+        console.log(`Searching for tag: '${searchTag}'`, );
+        console.log(`Additional tags:`, addTags);
+
+        const check = await fetchImageWithTag(searchTag);
 
         if (!check) {
-            console.log('No images found with the tag:', tag);
+            console.log(`No images found with the tag: '${searchTag}'`);
             return;
         }
 
@@ -191,15 +195,16 @@ function getSiteName(reverseSearchResult)
         graphqlClient.setHeader('Cookie', cookies)
 
         const processors = (await import("./processors/index.js")).default;
+        processors.sort((a, b) => a.index - b.index);
         
         let subsequentErrors = 0;
         while (true) {
             try {
                 console.log('-'.repeat(20));
-                const image = await fetchImageWithTag(tag);
+                const image = await fetchImageWithTag(searchTag);
 
                 if (!image) {
-                    console.log('No more images to process with tag', tag);
+                    console.log('No more images to process with tag', searchTag);
                     break;
                 }
                 
@@ -207,7 +212,7 @@ function getSiteName(reverseSearchResult)
                 const ext = compress? 'webp' : image.ext;
                 const tempImagePath = `/tmp/${image.hash}.${ext}`;
                 const url = `${SHIMMIE_ENDPOINT}${image.image_link}`;
-                image.tags = append? image.tags.filter(t => t !== DEFAULT_TAG) : [];
+                image.tags = append? [...image.tags, ...addTags] : addTags;
                 
                 let publicUrl = url;
                 if (upload) {
@@ -219,8 +224,10 @@ function getSiteName(reverseSearchResult)
                     publicUrl = chibisafeUrl;
                 }
                 
-                const reverseSearchResults = await reverseSearchImage(publicUrl);
-                const fittingResults = reverseSearchResults.filter(result => result.similarity > MAX_SIMILARITY && processors.some(p => p.index === result.index));
+                const reverseSearchResults = await sagiriClient(publicUrl);
+                const fittingResults = reverseSearchResults
+                    .filter(result => result.similarity > MAX_SIMILARITY && processors.some(p => p.index === result.index))
+                    .sort((a, b) => a.index - b.index);
                 
                 let processorSuccess = false;
                 console.log(fittingResults.length, 'fitting results found.');
@@ -237,7 +244,7 @@ function getSiteName(reverseSearchResult)
 
                         if (metadata) {
                             console.log(`✅[${logTitle}] Image metadata fetched successfully.`);
-                            const mutationResult = await updateImageMetadata(image, metadata.tags, metadata.source, metadata.rating, overrideSource);
+                            const mutationResult = await updateImageMetadata(image, metadata.tags, metadata.source, metadata.rating, overrideSource, searchTag);
                             const newMeta = mutationResult.update_post_metadata;
                             console.log(`✅[${logTitle}] Image metadata updated successfully.
                                 Tags: ${newMeta.tags.length},
@@ -261,7 +268,7 @@ function getSiteName(reverseSearchResult)
                     {
                         site = getSiteName(resultWithAuthor);
                         const authorName = resultWithAuthor.authorName.replace(/[`~!@#$%^&*()_|+\-=?;:'",.<>/{\}\\[\]\/]/gi, '').replace(/ /g, '_');
-                        await updateImageMetadata(image, [`artist:${authorName}`, `meta:${site}`], resultWithAuthor.url, '?', overrideSource);
+                        await updateImageMetadata(image, [`artist:${authorName}`, `meta:${site}`], resultWithAuthor.url, '?', overrideSource, searchTag);
                         console.log(`✅[EXT + AUTHOR] Image metadata updated with external link (${site}) and author (${authorName}).`);
                     }
                     else {
@@ -269,12 +276,12 @@ function getSiteName(reverseSearchResult)
                         if (simpleResult)
                         {
                             site = getSiteName(simpleResult);
-                            await updateImageMetadata(image, [`meta:${site}`], simpleResult.url, '?', overrideSource);
+                            await updateImageMetadata(image, [`meta:${site}`], simpleResult.url, '?', overrideSource, searchTag);
                             console.log(`✅[EXT] Image metadata updated with external link (${site}).`);
                         }
                         else {
-                            await setNotFoundMetadata(image, publicUrl);
-                            console.log('☑️[NOT FOUND] Image metadata updated with not found status.');
+                            await setNotFoundMetadata(image, publicUrl, searchTag, markUnknown);
+                            console.log('❌[NOT FOUND] Image metadata updated with not found status.');
                             
                             const lowSimilarity = reverseSearchResults.find(result => result.similarity > MIN_SIMILARITY);
                             if (lowSimilarity)

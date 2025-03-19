@@ -2,6 +2,13 @@ const DANBOORU_URL = 'https://danbooru.donmai.us/posts';
 const NAME = 'danbooru';
 const INDEX = 9;
 
+const ratings = {
+    s: 'q',
+    q: 'q',
+    e: 'e',
+    g: 's',
+};
+
 async function fetchMetadata(url) {
     try {
         const booruId = url.split('/').pop();
@@ -24,7 +31,7 @@ async function fetchMetadata(url) {
         const generalTags = metadata.tag_string_general.split(' ').filter(Boolean);
         const tags = [...charTags, ...artistTags, ...metaTags, ...seriesTags, ...generalTags, `meta:${NAME}`];
         const source = metadata.source || `https://danbooru.donmai.us/posts/${booruId}`;
-        const rating = metadata.rating || '?';
+        const rating = ratings[metadata.rating] || '?';
 
         return {
             tags,

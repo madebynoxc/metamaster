@@ -39,9 +39,13 @@ async function fetchMetadata(url) {
 
         const res = await fetch(apiUrl);
         const data = await res.json();
+
+        if (!data.post) {
+            throw new Error('Post was likely deleted');
+        }
+
         const metadata = data.post[0];
         const postTags = metadata.tags.split(' ').filter(Boolean);
-        console.log(metadata);
 
         const tags = [...postTags, `meta:${NAME}`];
         const source = getValidHttpUrl(metadata.source) || `https://gelbooru.com/index.php?page=post&s=view&id=${gelbooruId}`;
