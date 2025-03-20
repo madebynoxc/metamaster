@@ -66,5 +66,6 @@ async function fetchMetadata(url) {
 export default {
     name: NAME,
     index: INDEX,
+    url: new URL(GELBOORU_URL),
     fetchMetadata,
 };

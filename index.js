@@ -25,10 +25,6 @@ const MIN_SIMILARITY = 40;
 
 const argv = yargs(hideBin(process.argv)).argv
 
-const sagiriClient = sagiri(SAUCENAO_API_KEY, {
-    results: 5,
-});
-
 const graphqlClient = new GraphQLClient(GRAPHQL_ENDPOINT, {
     'Content-Type': 'application/json',
 });
@@ -170,6 +166,22 @@ function getSiteName(reverseSearchResult)
 
 (async () => {
     try {
+        const extract = argv.extract || false;
+        if (extract) {
+            const extractUrl = new URL(extract);
+            const processors = (await import("./processors/index.js")).default;
+
+            for (const processor of processors.filter(p => extractUrl.origin == p.url.origin)) {
+                const metadata = await processor.fetchMetadata(extract);
+                console.log(`[Tags]`, metadata.tags.join(' '));
+                console.log(`[Source]`, metadata.source);
+                console.log(`[Rating]`, metadata.rating);
+                break;
+            }
+
+            return;
+        }
+
         const searchTag = argv.tag || DEFAULT_TAG;
         const addTags = argv.add?.split(' ') || [];
         const append = argv.append || false;
@@ -196,6 +208,10 @@ function getSiteName(reverseSearchResult)
 
         const processors = (await import("./processors/index.js")).default;
         processors.sort((a, b) => a.index - b.index);
+
+        const sagiriClient = sagiri(SAUCENAO_API_KEY, {
+            results: 5,
+        });
         
         let subsequentErrors = 0;
         while (true) {

@@ -29,5 +29,6 @@ async function fetchMetadata(url) {
 export default {
     name: NAME,
     index: INDEX,
+    url: new URL(KONACHAN_URL),
     fetchMetadata,
 };

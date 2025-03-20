@@ -48,5 +48,6 @@ async function fetchMetadata(url) {
 export default {
     name: NAME,
     index: INDEX,
+    url: new URL(DANBOORU_URL),
     fetchMetadata,
 };
