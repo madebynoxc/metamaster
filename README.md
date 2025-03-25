@@ -54,9 +54,9 @@ Other is for tagging posts uploaded using https://github.com/madebynoxc/bsky2boo
 
 ## Arguments
 
-- `--append` - If set, appends new tags to the old ones. Shimmie will make sure to remove duplicates.
 - `--tag` - Custom tag to search, default is `tagme`. That tag will be removed from the post, otherwise the program will keep picking the same post.
-- `--add` - Tags to add. Needs a string, tags separated by space, e.g. `--add meta:video twitter usingMetaMaster`.
+- `--add` - Tags to add. Needs a string, tags separated by space, e.g. `--add="meta:video twitter usingMetaMaster"`.
+- `--append` - If set, appends new tags to the old ones. Shimmie will make sure to remove duplicates.
 - `--upload` - If set, uploads the image to a public cloud. `CHIBISAFE_UPLOAD_URL` and `CHIBISAFE_API_KEY` are required. If your Shimmie serves URLs accessable from the internet, this can be avoided.
 - `--compress` - If set, compresses the imae to `webp` before uploading to the public cloud. This reduces the size of the image significantly, but might impact the search purity. Only works when `--upload` is set.
 - `--overrideSource` - If set, the post source will be overriden. Otherwise, source will be set only if the target post has surce set to null.
