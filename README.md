@@ -11,7 +11,7 @@ If you don't have `pnpm` installed (`pnpm --version`) you can install it [here](
 After pulling this repository:
 
 ```sh
-pnpm i && pnpm build
+pnpm i
 ```
 
 Make your own `.env` file from the template (see Environment section for details):
