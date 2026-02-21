@@ -159,6 +159,29 @@ async function setNotFoundMetadata(image, publicUrl, searchTag, markUnknown) {
     return await graphqlClient.request(mutation);
 }
 
+async function setErrorMetadata(image, publicUrl, searchTag) {
+    const post_id = image.post_id;
+    const source = image.source || publicUrl;
+    const tags = image.tags.filter(t => t != searchTag);
+    const mutation = gql`
+        mutation {
+            update_post_metadata(
+                post_id: ${post_id}, 
+                metadata: [
+                    {key: "tags", value: "${tags.join(' ')} meta:error meta:metamaster"},
+                    {key: "source", value: "${source}"},
+                ]
+            ) {
+                id
+                tags
+                source
+            }
+        }
+    `;
+
+    return await graphqlClient.request(mutation);
+}
+
 function getSiteName(reverseSearchResult)
 {
     return reverseSearchResult.site.replace('.', '_').replace(/ /g, '_').toLowerCase();
@@ -316,6 +339,11 @@ function getSiteName(reverseSearchResult)
                 console.error('❌Error:', error);
 
                 subsequentErrors++;
+                if (subsequentErrors > 1) {
+                    await setErrorMetadata(image, publicUrl, searchTag);
+                    console.log('❌Error metadata set for the image. Marking it as error to avoid repeated failures.');
+                }
+
                 if (subsequentErrors >= 3) {
                     console.error('❌Too many subsequent errors. Please check the logs above for more information. Exiting...');
                     break;
