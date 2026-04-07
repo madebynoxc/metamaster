@@ -254,47 +254,69 @@ function getSiteName(reverseSearchResult)
                 image.tags = append? [...image.tags, ...addTags] : addTags;
                 
                 let publicUrl = url;
-                if (upload) {
-                    await downloadImage(url, tempImagePath, compress);
-                    console.log('✅Image downloaded successfully:', tempImagePath);
-
-                    const chibisafeUrl = await uploadToChibisafe(tempImagePath);
-                    console.log('✅Image uploaded to Chibisafe:', chibisafeUrl);
-                    publicUrl = chibisafeUrl;
-                }
-                
-                const reverseSearchResults = await sagiriClient(publicUrl);
-                const fittingResults = reverseSearchResults
-                    .filter(result => result.similarity > MAX_SIMILARITY && processors.some(p => p.index === result.index))
-                    .sort((a, b) => a.index - b.index);
-                
                 let processorSuccess = false;
-                console.log(fittingResults.length, 'fitting results found.');
-                fittingResults.map(result => result.url).forEach(url => console.log(`---| ${url}`));
+                let reverseSearchResults = [];
 
-                for (const result of fittingResults) {
-                    const processor = processors.find(p => p.index === result.index);
-                    const logTitle = processor.name.toUpperCase();
-
-                    console.log(`⏳[${logTitle}] Processing image...`);
-
-                    try {
-                        const metadata = await processor.fetchMetadata(result.url);
-
+                if (image.source && image.source.startsWith('http')) {
+                    const danbooru = processors.find(p => p.name === 'danbooru');
+                    if (danbooru && danbooru.searchBySource) {
+                        console.log(`⏳[DANBOORU] Searching for post by source: ${image.source}`);
+                        const metadata = await danbooru.searchBySource(image.source);
                         if (metadata) {
-                            console.log(`✅[${logTitle}] Image metadata fetched successfully.`);
+                            console.log(`✅[DANBOORU] Image found by source.`);
                             const mutationResult = await updateImageMetadata(image, metadata.tags, metadata.source, metadata.rating, overrideSource, searchTag);
                             const newMeta = mutationResult.update_post_metadata;
-                            console.log(`✅[${logTitle}] Image metadata updated successfully.
+                            console.log(`✅[DANBOORU] Image metadata updated successfully.
                                 Tags: ${newMeta.tags.length},
                                 Source: ${newMeta.source}
                                 Rating: ${metadata.rating}`);
-
                             processorSuccess = true;
-                            break;
                         }
-                    } catch (error) {
-                        console.error(`❌[${logTitle}] Error:`, error);
+                    }
+                }
+
+                if (!processorSuccess) {
+                    if (upload) {
+                        await downloadImage(url, tempImagePath, compress);
+                        console.log('✅Image downloaded successfully:', tempImagePath);
+
+                        const chibisafeUrl = await uploadToChibisafe(tempImagePath);
+                        console.log('✅Image uploaded to Chibisafe:', chibisafeUrl);
+                        publicUrl = chibisafeUrl;
+                    }
+
+                    reverseSearchResults = await sagiriClient(publicUrl);
+                    const fittingResults = reverseSearchResults
+                        .filter(result => result.similarity > MAX_SIMILARITY && processors.some(p => p.index === result.index))
+                        .sort((a, b) => a.index - b.index);
+                    
+                    console.log(fittingResults.length, 'fitting results found.');
+                    fittingResults.map(result => result.url).forEach(url => console.log(`---| ${url}`));
+
+                    for (const result of fittingResults) {
+                        const processor = processors.find(p => p.index === result.index);
+                        const logTitle = processor.name.toUpperCase();
+
+                        console.log(`⏳[${logTitle}] Processing image...`);
+
+                        try {
+                            const metadata = await processor.fetchMetadata(result.url);
+
+                            if (metadata) {
+                                console.log(`✅[${logTitle}] Image metadata fetched successfully.`);
+                                const mutationResult = await updateImageMetadata(image, metadata.tags, metadata.source, metadata.rating, overrideSource, searchTag);
+                                const newMeta = mutationResult.update_post_metadata;
+                                console.log(`✅[${logTitle}] Image metadata updated successfully.
+                                    Tags: ${newMeta.tags.length},
+                                    Source: ${newMeta.source}
+                                    Rating: ${metadata.rating}`);
+
+                                processorSuccess = true;
+                                break;
+                            }
+                        } catch (error) {
+                            console.error(`❌[${logTitle}] Error:`, error);
+                        }
                     }
                 }
 

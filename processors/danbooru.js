@@ -9,6 +9,23 @@ const ratings = {
     g: 's',
 };
 
+function extractMetadata(metadata) {
+    const charTags = metadata.tag_string_character.split(' ').filter(Boolean).map(tag => `character:${tag}`);
+    const artistTags = metadata.tag_string_artist.split(' ').filter(Boolean).map(tag => `artist:${tag}`);
+    const metaTags = metadata.tag_string_meta.split(' ').filter(Boolean).map(tag => `meta:${tag}`);
+    const seriesTags = metadata.tag_string_copyright.split(' ').filter(Boolean).map(tag => `series:${tag}`);
+    const generalTags = metadata.tag_string_general.split(' ').filter(Boolean);
+    const tags = [...charTags, ...artistTags, ...metaTags, ...seriesTags, ...generalTags, `meta:${NAME}`];
+    const source = metadata.source || `https://danbooru.donmai.us/posts/${metadata.id}`;
+    const rating = ratings[metadata.rating] || '?';
+
+    return {
+        tags,
+        source,
+        rating,
+    };
+}
+
 async function fetchMetadata(url) {
     try {
         const booruId = url.split('/').pop();
@@ -23,21 +40,7 @@ async function fetchMetadata(url) {
         
         const res = await fetch(apiUrl);
         const metadata = await res.json();
-
-        const charTags = metadata.tag_string_character.split(' ').filter(Boolean).map(tag => `character:${tag}`);
-        const artistTags = metadata.tag_string_artist.split(' ').filter(Boolean).map(tag => `artist:${tag}`);
-        const metaTags = metadata.tag_string_meta.split(' ').filter(Boolean).map(tag => `meta:${tag}`);
-        const seriesTags = metadata.tag_string_copyright.split(' ').filter(Boolean).map(tag => `series:${tag}`);
-        const generalTags = metadata.tag_string_general.split(' ').filter(Boolean);
-        const tags = [...charTags, ...artistTags, ...metaTags, ...seriesTags, ...generalTags, `meta:${NAME}`];
-        const source = metadata.source || `https://danbooru.donmai.us/posts/${booruId}`;
-        const rating = ratings[metadata.rating] || '?';
-
-        return {
-            tags,
-            source,
-            rating,
-        };
+        return extractMetadata(metadata);
     }
     catch (error) {
         console.error('[DANBOORU] Error fetching metadata:', error);
@@ -45,9 +48,35 @@ async function fetchMetadata(url) {
     }
 };
 
+async function searchBySource(sourceUrl) {
+    try {
+        const login = process.env.DANBOORU_LOGIN;
+        const key = process.env.DANBOORU_KEY;
+
+        let apiUrl = `https://danbooru.donmai.us/posts.json?tags=source:${encodeURIComponent(sourceUrl)}`;
+
+        if (login && key) {
+            apiUrl += `&login=${login}&api_key=${key}`;
+        }
+        
+        const res = await fetch(apiUrl);
+        const results = await res.json();
+
+        if (Array.isArray(results) && results.length > 0) {
+            return extractMetadata(results[0]);
+        }
+        return null;
+    }
+    catch (error) {
+        console.error('[DANBOORU] Error searching by source:', error);
+        return null;
+    }
+}
+
 export default {
     name: NAME,
     index: INDEX,
     url: new URL(DANBOORU_URL),
     fetchMetadata,
+    searchBySource,
 };
