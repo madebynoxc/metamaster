@@ -45,9 +45,10 @@ async function gqlAuth() {
 }
 
 async function fetchImageWithTag(tag) {
+    const terms = tag.split(' ').filter(t => t.length > 0);
     const query = gql`
         query {
-            posts(limit: 1, offset: 0, tags: "${tag}") {
+            posts(limit: 1, offset: 0, terms: ${JSON.stringify(terms)}) {
                 id
                 post_id
                 tags
