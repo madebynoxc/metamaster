@@ -20,7 +20,7 @@ const CHIBISAFE_UPLOAD_URL = process.env.CHIBISAFE_UPLOAD_URL;
 const CHIBISAFE_API_KEY = process.env.CHIBISAFE_API_KEY;
 
 const TAGGER_URL = process.env.TAGGER_URL;
-const TAGGER_MODEL = process.env.TAGGER_MODEL;
+const TAGGER_MODEL = process.env.TAGGER_MODEL || 'wd-v1-4-moat-tagger.v2';
 const TAGGER_THRESHOLD = parseFloat(process.env.TAGGER_THRESHOLD) || 0.35;
 
 const DEFAULT_TAG = 'tagme';
@@ -107,6 +107,10 @@ async function interrogateImage(filePath) {
   try {
     const imageBuffer = fs.readFileSync(filePath);
     const base64Image = imageBuffer.toString('base64');
+
+    if (!TAGGER_URL) {
+      return null;
+    }
 
     const response = await fetch(TAGGER_URL, {
       method: 'POST',

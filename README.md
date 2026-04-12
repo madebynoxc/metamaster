@@ -2,7 +2,7 @@
 
 Using pre-defined processors, MetaMaster extracts tags, source and rating from posts using SauceNAO as a reverse image search tool. It bundles up a bunch of API calls into a streamlined workflow: `get post -> (upload to public cloud) -> reverse search -> find a fitting processor -> update post metadata`. See below for `.env` configuration to specify API keys.
 
-Make sure that `GraphQL` extension is enabled in Shimmie.
+Make sure that `GraphQL` extension is enabled in Shimmie. Only works with Shimmie 2.12+ since the gql schema has changed and is not backwards compatible.
 
 ## Usage
 
@@ -51,6 +51,9 @@ Other is for tagging posts uploaded using https://github.com/madebynoxc/bsky2boo
 - `DANBOORU_KEY` - (optional) Danbooru key to avoid rate limits.
 - `GELBOORU_ID` - (optional) Gelbooru login to avoid rate limits.
 - `GELBOORU_KEY` - (optional) Gelbooru key to avoid rate limits.
+- `TAGGER_URL` - (optional) URL of `Automatic1111/stable-diffusion-webui` with Tagger extension and API enabled. Metamaster will fall back to this if the reverse image search fails.
+- `TAGGER_MODEL` - (optional) tagger model to use. Default is `wd-v1-4-moat-tagger.v2` since it is pre-installed and supports ratings.
+- `TAGGER_THRESHOLD` - (optional) threshold of tag confidence. Default is `0.35`.
 
 ## Arguments
 
@@ -82,5 +85,3 @@ export default {
         } 
 };
 ```
-
-Apologies for scuffed ways of adding processor, I didn't care to rewrite to TS when I was adding features.
