@@ -19,6 +19,10 @@ const SHIMMIE_PASSWORD = process.env.SHIMMIE_PASSWORD;
 const CHIBISAFE_UPLOAD_URL = process.env.CHIBISAFE_UPLOAD_URL;
 const CHIBISAFE_API_KEY = process.env.CHIBISAFE_API_KEY;
 
+const TAGGER_URL = process.env.TAGGER_URL;
+const TAGGER_MODEL = process.env.TAGGER_MODEL;
+const TAGGER_THRESHOLD = parseFloat(process.env.TAGGER_THRESHOLD) || 0.35;
+
 const DEFAULT_TAG = 'tagme';
 const MAX_SIMILARITY = 80;
 const MIN_SIMILARITY = 40;
@@ -26,11 +30,11 @@ const MIN_SIMILARITY = 40;
 const argv = yargs(hideBin(process.argv)).argv
 
 const graphqlClient = new GraphQLClient(GRAPHQL_ENDPOINT, {
-    'Content-Type': 'application/json',
+  'Content-Type': 'application/json',
 });
 
 async function gqlAuth() {
-    const auth = gql`
+  const auth = gql`
         mutation {
             login(username: "${SHIMMIE_LOGIN}", password: "${SHIMMIE_PASSWORD}") {
                 user {
@@ -41,12 +45,12 @@ async function gqlAuth() {
         }
     `;
 
-    return await graphqlClient.request(auth);
+  return await graphqlClient.request(auth);
 }
 
 async function fetchImageWithTag(tag) {
-    const terms = tag.split(' ').filter(t => t.length > 0);
-    const query = gql`
+  const terms = tag.split(' ').filter(t => t.length > 0);
+  const query = gql`
         query {
             posts(limit: 1, offset: 0, terms: ${JSON.stringify(terms)}) {
                 id
@@ -60,68 +64,121 @@ async function fetchImageWithTag(tag) {
         }
     `;
 
-    const data = await graphqlClient.request(query);
-    return data.posts[0];
+  const data = await graphqlClient.request(query);
+  return data.posts[0];
 }
 
 async function downloadImage(url, path, compress) {
-    const response = await fetch(url);
-    const arrayBuffer = await response.arrayBuffer();
-    let buffer;
+  const response = await fetch(url);
+  const arrayBuffer = await response.arrayBuffer();
+  let buffer;
 
-    if (compress) {
-        buffer = await sharp(arrayBuffer)
-            .removeAlpha()
-            .toFormat('webp', { quality: 80 })
-            .toBuffer();
-    }
-    else {
-        buffer = Buffer.from(arrayBuffer);
-    }
-    
-    fs.writeFileSync(path, buffer);
+  if (compress) {
+    buffer = await sharp(arrayBuffer)
+      .removeAlpha()
+      .toFormat('webp', { quality: 80 })
+      .toBuffer();
+  }
+  else {
+    buffer = Buffer.from(arrayBuffer);
+  }
+
+  fs.writeFileSync(path, buffer);
 }
 
 async function uploadToChibisafe(filePath) {
-    const form = new FormData();
-    form.append('file', fs.createReadStream(filePath));
+  const form = new FormData();
+  form.append('file', fs.createReadStream(filePath));
 
-    const response = await fetch(CHIBISAFE_UPLOAD_URL, {
-        method: 'POST',
-        body: form,
-        headers: {
-            ...form.getHeaders(),
-            'x-api-key': CHIBISAFE_API_KEY,
-        }
+  const response = await fetch(CHIBISAFE_UPLOAD_URL, {
+    method: 'POST',
+    body: form,
+    headers: {
+      ...form.getHeaders(),
+      'x-api-key': CHIBISAFE_API_KEY,
+    }
+  });
+
+  const data = await response.json();
+  return data.url;
+}
+
+async function interrogateImage(filePath) {
+  try {
+    const imageBuffer = fs.readFileSync(filePath);
+    const base64Image = imageBuffer.toString('base64');
+
+    const response = await fetch(TAGGER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: base64Image,
+        model: TAGGER_MODEL,
+        threshold: TAGGER_THRESHOLD
+      })
     });
 
+    if (!response.ok) {
+      console.error('❌[TAGGER] Tagger API error:', response.statusText);
+      return null;
+    }
+
     const data = await response.json();
-    return data.url;
+    // The response format is { caption: { tag: { tag1: score1, ... }, rating: { rating1: score1, ... } } }
+    if (data.caption && data.caption.tag) {
+      const tags = Object.keys(data.caption.tag);
+      console.log('✅[TAGGER] Interrogation complete.');
+
+      let rating = '?';
+      if (data.caption.rating) {
+        let maxRating = '';
+        let maxValue = -1;
+        for (const [r, value] of Object.entries(data.caption.rating)) {
+          if (value > maxValue) {
+            maxValue = value;
+            maxRating = r;
+          }
+        }
+
+        const ratingMap = {
+          'general': 's',
+          'sensitive': 's',
+          'questionable': 'q',
+          'explicit': 'e'
+        };
+        rating = ratingMap[maxRating] || '?';
+      }
+
+      return { tags, rating };
+    }
+  } catch (error) {
+    console.error('❌[TAGGER] Error:', error);
+  }
+  return null;
 }
 
 async function updateImageMetadata(image, tags, source, rating, overrideSource, searchTag) {
-    const post_id = image.post_id;
-    const metadata = [{
-        key: 'tags',
-        value: `${[...tags, ...image.tags].filter(t => t != searchTag).join(' ')} meta:metamaster`
-    }];
+  const post_id = image.post_id;
+  const metadata = [{
+    key: 'tags',
+    value: `${[...tags, ...image.tags].filter(t => t != searchTag).join(' ')} meta:metamaster`
+  }];
 
-    if (!image.source || overrideSource)
-    {
-        metadata.push({
-            key: 'source',
-            value: source
-        });
-    }
+  if (!image.source || overrideSource) {
+    metadata.push({
+      key: 'source',
+      value: source
+    });
+  }
 
-    if (rating && rating !== '?') {
-        metadata.push({
-            key: 'rating',
-            value: rating
-        });
-    }
+  if (rating && rating !== '?') {
+    metadata.push({
+      key: 'rating',
+      value: rating
+    });
+  }
 
-    const mutation = gql`
+  const mutation = gql`
         mutation {
             update_post_metadata(
                 post_id: ${post_id}, 
@@ -134,19 +191,19 @@ async function updateImageMetadata(image, tags, source, rating, overrideSource, 
         }
     `;
 
-    return await graphqlClient.request(mutation);
+  return await graphqlClient.request(mutation);
 }
 
 async function setNotFoundMetadata(image, publicUrl, searchTag, markUnknown) {
-    const post_id = image.post_id;
-    const source = image.source || publicUrl;
-    const tags = image.tags.filter(t => t != searchTag);
-    const mutation = gql`
+  const post_id = image.post_id;
+  const source = image.source || publicUrl;
+  const tags = image.tags.filter(t => t != searchTag);
+  const mutation = gql`
         mutation {
             update_post_metadata(
                 post_id: ${post_id}, 
                 metadata: [
-                    {key: "tags", value: "${tags.join(' ')} ${markUnknown? 'meta:unknown' : ''} meta:metamaster"},
+                    {key: "tags", value: "${tags.join(' ')} ${markUnknown ? 'meta:unknown' : ''} meta:metamaster"},
                     {key: "source", value: "${source}"},
                 ]
             ) {
@@ -157,14 +214,14 @@ async function setNotFoundMetadata(image, publicUrl, searchTag, markUnknown) {
         }
     `;
 
-    return await graphqlClient.request(mutation);
+  return await graphqlClient.request(mutation);
 }
 
 async function setErrorMetadata(image, publicUrl, searchTag) {
-    const post_id = image.post_id;
-    const source = image.source || publicUrl;
-    const tags = image.tags.filter(t => t != searchTag);
-    const mutation = gql`
+  const post_id = image.post_id;
+  const source = image.source || publicUrl;
+  const tags = image.tags.filter(t => t != searchTag);
+  const mutation = gql`
         mutation {
             update_post_metadata(
                 post_id: ${post_id}, 
@@ -180,204 +237,212 @@ async function setErrorMetadata(image, publicUrl, searchTag) {
         }
     `;
 
-    return await graphqlClient.request(mutation);
+  return await graphqlClient.request(mutation);
 }
 
-function getSiteName(reverseSearchResult)
-{
-    return reverseSearchResult.site.replace('.', '_').replace(/ /g, '_').toLowerCase();
+function getSiteName(reverseSearchResult) {
+  return reverseSearchResult.site.replace('.', '_').replace(/ /g, '_').toLowerCase();
 }
 
 (async () => {
-    try {
-        const extract = argv.extract || false;
-        if (extract) {
-            const extractUrl = new URL(extract);
-            const processors = (await import("./processors/index.js")).default;
+  try {
+    const extract = argv.extract || false;
+    if (extract) {
+      const extractUrl = new URL(extract);
+      const processors = (await import("./processors/index.js")).default;
 
-            for (const processor of processors.filter(p => extractUrl.origin == p.url.origin)) {
-                const metadata = await processor.fetchMetadata(extract);
-                console.log(`[Tags]`, metadata.tags.join(' '));
-                console.log(`[Source]`, metadata.source);
-                console.log(`[Rating]`, metadata.rating);
-                break;
-            }
+      for (const processor of processors.filter(p => extractUrl.origin == p.url.origin)) {
+        const metadata = await processor.fetchMetadata(extract);
+        console.log(`[Tags]`, metadata.tags.join(' '));
+        console.log(`[Source]`, metadata.source);
+        console.log(`[Rating]`, metadata.rating);
+        break;
+      }
 
-            return;
+      return;
+    }
+
+    const searchTag = argv.tag || DEFAULT_TAG;
+    const addTags = argv.add?.split(' ') || [];
+    const append = argv.append || false;
+    const upload = argv.upload || false;
+    const compress = argv.compress || false;
+    const overrideSource = argv.overrideSource || false;
+    const markUnknown = argv.markUnknown || false;
+
+    console.log(`Searching for tag: '${searchTag}'`,);
+    console.log(`Additional tags:`, addTags);
+
+    const check = await fetchImageWithTag(searchTag);
+
+    if (!check) {
+      console.log(`No images found with the tag: '${searchTag}'`);
+      return;
+    }
+
+    const authResult = await gqlAuth();
+    console.log('Logged in as:', authResult.login.user.name);
+
+    const cookies = `shm_user=${authResult.login.user.name}; shm_session=${authResult.login.session}`;
+    graphqlClient.setHeader('Cookie', cookies)
+
+    const processors = (await import("./processors/index.js")).default;
+    processors.sort((a, b) => a.index - b.index);
+
+    const sagiriClient = sagiri(SAUCENAO_API_KEY, {
+      results: 5,
+    });
+
+    let subsequentErrors = 0;
+    while (true) {
+      try {
+        console.log('-'.repeat(20));
+        const image = await fetchImageWithTag(searchTag);
+
+        if (!image) {
+          console.log('No more images to process with tag', searchTag);
+          break;
         }
 
-        const searchTag = argv.tag || DEFAULT_TAG;
-        const addTags = argv.add?.split(' ') || [];
-        const append = argv.append || false;
-        const upload = argv.upload || false;
-        const compress = argv.compress || false;
-        const overrideSource = argv.overrideSource || false;
-        const markUnknown = argv.markUnknown || false;
+        console.log('Image fetched:', image.id);
+        const ext = compress ? 'webp' : image.ext;
+        const tempImagePath = `/tmp/${image.hash}.${ext}`;
+        const url = `${SHIMMIE_ENDPOINT}${image.image_link}`;
+        image.tags = append ? [...image.tags, ...addTags] : addTags;
 
-        console.log(`Searching for tag: '${searchTag}'`, );
-        console.log(`Additional tags:`, addTags);
+        let publicUrl = url;
+        let processorSuccess = false;
+        let reverseSearchResults = [];
 
-        const check = await fetchImageWithTag(searchTag);
-
-        if (!check) {
-            console.log(`No images found with the tag: '${searchTag}'`);
-            return;
-        }
-
-        const authResult = await gqlAuth();
-        console.log('Logged in as:', authResult.login.user.name);
-
-        const cookies = `shm_user=${authResult.login.user.name}; shm_session=${authResult.login.session}`;
-        graphqlClient.setHeader('Cookie', cookies)
-
-        const processors = (await import("./processors/index.js")).default;
-        processors.sort((a, b) => a.index - b.index);
-
-        const sagiriClient = sagiri(SAUCENAO_API_KEY, {
-            results: 5,
-        });
-        
-        let subsequentErrors = 0;
-        while (true) {
-            try {
-                console.log('-'.repeat(20));
-                const image = await fetchImageWithTag(searchTag);
-
-                if (!image) {
-                    console.log('No more images to process with tag', searchTag);
-                    break;
-                }
-                
-                console.log('Image fetched:', image.id);
-                const ext = compress? 'webp' : image.ext;
-                const tempImagePath = `/tmp/${image.hash}.${ext}`;
-                const url = `${SHIMMIE_ENDPOINT}${image.image_link}`;
-                image.tags = append? [...image.tags, ...addTags] : addTags;
-                
-                let publicUrl = url;
-                let processorSuccess = false;
-                let reverseSearchResults = [];
-
-                if (image.source && image.source.startsWith('http')) {
-                    const danbooru = processors.find(p => p.name === 'danbooru');
-                    if (danbooru && danbooru.searchBySource) {
-                        console.log(`⏳[DANBOORU] Searching for post by source: ${image.source}`);
-                        const metadata = await danbooru.searchBySource(image.source);
-                        if (metadata) {
-                            console.log(`✅[DANBOORU] Image found by source.`);
-                            const mutationResult = await updateImageMetadata(image, metadata.tags, metadata.source, metadata.rating, overrideSource, searchTag);
-                            const newMeta = mutationResult.update_post_metadata;
-                            console.log(`✅[DANBOORU] Image metadata updated successfully.
+        if (image.source && image.source.startsWith('http')) {
+          const danbooru = processors.find(p => p.name === 'danbooru');
+          if (danbooru && danbooru.searchBySource) {
+            console.log(`⏳[DANBOORU] Searching for post by source: ${image.source}`);
+            const metadata = await danbooru.searchBySource(image.source);
+            if (metadata) {
+              console.log(`✅[DANBOORU] Image found by source.`);
+              const mutationResult = await updateImageMetadata(image, metadata.tags, metadata.source, metadata.rating, overrideSource, searchTag);
+              const newMeta = mutationResult.update_post_metadata;
+              console.log(`✅[DANBOORU] Image metadata updated successfully.
                                 Tags: ${newMeta.tags.length},
                                 Source: ${newMeta.source}
                                 Rating: ${metadata.rating}`);
-                            processorSuccess = true;
-                        }
-                    }
-                }
+              processorSuccess = true;
+            }
+          }
+        }
 
-                if (!processorSuccess) {
-                    if (upload) {
-                        await downloadImage(url, tempImagePath, compress);
-                        console.log('✅Image downloaded successfully:', tempImagePath);
+        if (!processorSuccess) {
+          if (upload) {
+            await downloadImage(url, tempImagePath, compress);
+            console.log('✅Image downloaded successfully:', tempImagePath);
 
-                        const chibisafeUrl = await uploadToChibisafe(tempImagePath);
-                        console.log('✅Image uploaded to Chibisafe:', chibisafeUrl);
-                        publicUrl = chibisafeUrl;
-                    }
+            const chibisafeUrl = await uploadToChibisafe(tempImagePath);
+            console.log('✅Image uploaded to Chibisafe:', chibisafeUrl);
+            publicUrl = chibisafeUrl;
+          }
 
-                    reverseSearchResults = await sagiriClient(publicUrl);
-                    const fittingResults = reverseSearchResults
-                        .filter(result => result.similarity > MAX_SIMILARITY && processors.some(p => p.index === result.index))
-                        .sort((a, b) => a.index - b.index);
-                    
-                    console.log(fittingResults.length, 'fitting results found.');
-                    fittingResults.map(result => result.url).forEach(url => console.log(`---| ${url}`));
+          reverseSearchResults = await sagiriClient(publicUrl);
+          const fittingResults = reverseSearchResults
+            .filter(result => result.similarity > MAX_SIMILARITY && processors.some(p => p.index === result.index))
+            .sort((a, b) => a.index - b.index);
 
-                    for (const result of fittingResults) {
-                        const processor = processors.find(p => p.index === result.index);
-                        const logTitle = processor.name.toUpperCase();
+          console.log(fittingResults.length, 'fitting results found.');
+          fittingResults.map(result => result.url).forEach(url => console.log(`---| ${url}`));
 
-                        console.log(`⏳[${logTitle}] Processing image...`);
+          for (const result of fittingResults) {
+            const processor = processors.find(p => p.index === result.index);
+            const logTitle = processor.name.toUpperCase();
 
-                        try {
-                            const metadata = await processor.fetchMetadata(result.url);
+            console.log(`⏳[${logTitle}] Processing image...`);
 
-                            if (metadata) {
-                                console.log(`✅[${logTitle}] Image metadata fetched successfully.`);
-                                const mutationResult = await updateImageMetadata(image, metadata.tags, metadata.source, metadata.rating, overrideSource, searchTag);
-                                const newMeta = mutationResult.update_post_metadata;
-                                console.log(`✅[${logTitle}] Image metadata updated successfully.
+            try {
+              const metadata = await processor.fetchMetadata(result.url);
+
+              if (metadata) {
+                console.log(`✅[${logTitle}] Image metadata fetched successfully.`);
+                const mutationResult = await updateImageMetadata(image, metadata.tags, metadata.source, metadata.rating, overrideSource, searchTag);
+                const newMeta = mutationResult.update_post_metadata;
+                console.log(`✅[${logTitle}] Image metadata updated successfully.
                                     Tags: ${newMeta.tags.length},
                                     Source: ${newMeta.source}
                                     Rating: ${metadata.rating}`);
 
-                                processorSuccess = true;
-                                break;
-                            }
-                        } catch (error) {
-                            console.error(`❌[${logTitle}] Error:`, error);
-                        }
-                    }
-                }
-
-                if (!processorSuccess) {
-                    console.log('⏳No processor match found. Attepmting to set basic metadata...');
-                    
-                    let site = '';
-                    const resultWithAuthor = reverseSearchResults.find(result => result.similarity > MAX_SIMILARITY && result.authorName != null);
-                    if (resultWithAuthor)
-                    {
-                        site = getSiteName(resultWithAuthor);
-                        const authorName = resultWithAuthor.authorName.replace(/[`~!@#$%^&*()_|+\-=?;:'",.<>/{\}\\[\]\/]/gi, '').replace(/ /g, '_');
-                        await updateImageMetadata(image, [`artist:${authorName}`, `meta:${site}`], resultWithAuthor.url, '?', overrideSource, searchTag);
-                        console.log(`✅[EXT + AUTHOR] Image metadata updated with external link (${site}) and author (${authorName}).`);
-                    }
-                    else {
-                        const simpleResult = reverseSearchResults.find(result => result.similarity > MAX_SIMILARITY);
-                        if (simpleResult)
-                        {
-                            site = getSiteName(simpleResult);
-                            await updateImageMetadata(image, [`meta:${site}`], simpleResult.url, '?', overrideSource, searchTag);
-                            console.log(`✅[EXT] Image metadata updated with external link (${site}).`);
-                        }
-                        else {
-                            await setNotFoundMetadata(image, publicUrl, searchTag, markUnknown);
-                            console.log('❌[NOT FOUND] Image metadata updated with not found status.');
-                            
-                            const lowSimilarity = reverseSearchResults.find(result => result.similarity > MIN_SIMILARITY);
-                            if (lowSimilarity)
-                            {
-                                console.log('Low similarity result:', lowSimilarity.url);
-                            }
-                        }
-                    }
-                }
-
-                subsequentErrors = 0;
-                
-                console.log(`Post link: ${SHIMMIE_ENDPOINT}/post/view/${image.post_id}`);
-                console.log('Cooling down...');
+                processorSuccess = true;
+                break;
+              }
             } catch (error) {
-                console.error('❌Error:', error);
-
-                subsequentErrors++;
-                if (subsequentErrors > 1) {
-                    await setErrorMetadata(image, publicUrl, searchTag);
-                    console.log('❌Error metadata set for the image. Marking it as error to avoid repeated failures.');
-                }
-
-                if (subsequentErrors >= 3) {
-                    console.error('❌Too many subsequent errors. Please check the logs above for more information. Exiting...');
-                    break;
-                }
-
-                console.log(`Retrying in 9 seconds (${subsequentErrors}/3)...`);
+              console.error(`❌[${logTitle}] Error:`, error);
             }
-
-            await new Promise(resolve => setTimeout(resolve, 9000));
+          }
         }
-    } catch (error) {
+
+        if (!processorSuccess) {
+          console.log('⏳No processor match found. Attepmting to set basic metadata...');
+
+          let site = '';
+          const resultWithAuthor = reverseSearchResults.find(result => result.similarity > MAX_SIMILARITY && result.authorName != null);
+          if (resultWithAuthor) {
+            site = getSiteName(resultWithAuthor);
+            const authorName = resultWithAuthor.authorName.replace(/[`~!@#$%^&*()_|+\-=?;:'",.<>/{\}\\[\]\/]/gi, '').replace(/ /g, '_');
+            await updateImageMetadata(image, [`artist:${authorName}`, `meta:${site}`], resultWithAuthor.url, '?', overrideSource, searchTag);
+            console.log(`✅[EXT + AUTHOR] Image metadata updated with external link (${site}) and author (${authorName}).`);
+          }
+          else {
+            const simpleResult = reverseSearchResults.find(result => result.similarity > MAX_SIMILARITY);
+            if (simpleResult) {
+              site = getSiteName(simpleResult);
+              await updateImageMetadata(image, [`meta:${site}`], simpleResult.url, '?', overrideSource, searchTag);
+              console.log(`✅[EXT] Image metadata updated with external link (${site}).`);
+            }
+            else {
+              console.log('⏳No high similarity results found. Attempting AI interrogation...');
+              if (!fs.existsSync(tempImagePath)) {
+                await downloadImage(url, tempImagePath, compress);
+              }
+
+              const metadata = await interrogateImage(tempImagePath);
+              if (metadata && metadata.tags.length > 0) {
+                await updateImageMetadata(image, [...metadata.tags, 'meta:tagger'], image.source || publicUrl, metadata.rating, overrideSource, searchTag);
+                console.log(`✅[TAGGER] Image metadata updated with ${metadata.tags.length} AI generated tags and rating: ${metadata.rating}.`);
+                processorSuccess = true;
+              } else {
+                await setNotFoundMetadata(image, publicUrl, searchTag, markUnknown);
+                console.log('❌[NOT FOUND] Image metadata updated with not found status.');
+
+                const lowSimilarity = reverseSearchResults.find(result => result.similarity > MIN_SIMILARITY);
+                if (lowSimilarity) {
+                  console.log('Low similarity result:', lowSimilarity.url);
+                }
+              }
+            }
+          }
+        }
+
+        subsequentErrors = 0;
+
+        console.log(`Post link: ${SHIMMIE_ENDPOINT}/post/view/${image.post_id}`);
+        console.log('Cooling down for 5 seconds before processing the next image...');
+      } catch (error) {
         console.error('❌Error:', error);
+
+        subsequentErrors++;
+        if (subsequentErrors > 1) {
+          await setErrorMetadata(image, publicUrl, searchTag);
+          console.log('❌Error metadata set for the image. Marking it as error to avoid repeated failures.');
+        }
+
+        if (subsequentErrors >= 3) {
+          console.error('❌Too many subsequent errors. Please check the logs above for more information. Exiting...');
+          break;
+        }
+
+        console.log(`Retrying in 5 seconds (${subsequentErrors}/3)...`);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 5000));
     }
+  } catch (error) {
+    console.error('❌Error:', error);
+  }
 })();
