@@ -7,6 +7,10 @@ import sharp from 'sharp';
 import yargs from 'yargs/yargs';
 import { hideBin } from 'yargs/helpers';
 import { gql, GraphQLClient } from 'graphql-request';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 dotenv.config();
 const SAUCENAO_API_KEY = process.env.SAUCENAO_API_KEY;
@@ -24,10 +28,19 @@ const TAGGER_MODEL = process.env.TAGGER_MODEL || 'wd-v1-4-moat-tagger.v2';
 const TAGGER_THRESHOLD = parseFloat(process.env.TAGGER_THRESHOLD) || 0.35;
 
 const DEFAULT_TAG = 'tagme';
+const VIDEO_EXTS = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'flv', 'm4v'];
 const MAX_SIMILARITY = 80;
 const MIN_SIMILARITY = 40;
 
 const argv = yargs(hideBin(process.argv)).argv
+
+class PostError extends Error {
+  constructor(message, extraTags = []) {
+    super(message);
+    this.name = 'PostError';
+    this.extraTags = extraTags;
+  }
+}
 
 const graphqlClient = new GraphQLClient(GRAPHQL_ENDPOINT, {
   'Content-Type': 'application/json',
@@ -70,20 +83,59 @@ async function fetchImageWithTag(tag) {
 
 async function downloadImage(url, path, compress) {
   const response = await fetch(url);
-  const arrayBuffer = await response.arrayBuffer();
-  let buffer;
+
+  if (!response.ok) {
+    throw new PostError(`Failed to download ${url}: ${response.status} ${response.statusText}`);
+  }
+
+  let buffer = Buffer.from(await response.arrayBuffer());
 
   if (compress) {
-    buffer = await sharp(arrayBuffer)
-      .removeAlpha()
-      .toFormat('webp', { quality: 80 })
-      .toBuffer();
-  }
-  else {
-    buffer = Buffer.from(arrayBuffer);
+    try {
+      buffer = await sharp(buffer)
+        .removeAlpha()
+        .toFormat('webp', { quality: 80 })
+        .toBuffer();
+    } catch (error) {
+      throw new PostError(`Could not compress ${url}: ${error.message}`);
+    }
   }
 
   fs.writeFileSync(path, buffer);
+}
+
+// ffmpeg is optional
+async function hasFfmpeg() {
+  try {
+    await execFileAsync('ffmpeg', ['-version']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function extractVideoFrame(url, path) {
+  for (const seek of ['1', '0']) {
+    try {
+      await execFileAsync('ffmpeg', [
+        '-y', '-loglevel', 'error',
+        '-ss', seek,
+        '-i', url,
+        '-frames:v', '1',
+        '-update', '1',
+        path,
+      ]);
+
+      // ffmpeg can exit 0 having written nothing at all.
+      if (fs.existsSync(path) && fs.statSync(path).size > 0) {
+        return true;
+      }
+    } catch (error) {
+      console.error(`❌[VIDEO] Frame extraction failed at ${seek}s:`, error.message.trim().split('\n').pop());
+    }
+  }
+
+  return false;
 }
 
 async function uploadToChibisafe(filePath) {
@@ -198,10 +250,10 @@ async function updateImageMetadata(image, tags, source, rating, overrideSource, 
   return await graphqlClient.request(mutation);
 }
 
-async function setNotFoundMetadata(image, publicUrl, searchTag, markUnknown) {
+async function setNotFoundMetadata(image, publicUrl, searchTag, markUnknown, extraTags = []) {
   const post_id = image.post_id;
   const source = image.source || publicUrl;
-  const tags = image.tags.filter(t => t != searchTag);
+  const tags = [...new Set([...image.tags.filter(t => t != searchTag), ...extraTags])];
   const mutation = gql`
         mutation {
             update_post_metadata(
@@ -221,10 +273,10 @@ async function setNotFoundMetadata(image, publicUrl, searchTag, markUnknown) {
   return await graphqlClient.request(mutation);
 }
 
-async function setErrorMetadata(image, publicUrl, searchTag) {
+async function setErrorMetadata(image, publicUrl, searchTag, extraTags = []) {
   const post_id = image.post_id;
   const source = image.source || publicUrl;
-  const tags = image.tags.filter(t => t != searchTag);
+  const tags = [...new Set([...image.tags.filter(t => t != searchTag), ...extraTags])];
   const mutation = gql`
         mutation {
             update_post_metadata(
@@ -242,6 +294,11 @@ async function setErrorMetadata(image, publicUrl, searchTag) {
     `;
 
   return await graphqlClient.request(mutation);
+}
+
+async function skipVideoPost(image, sourceUrl, searchTag, markUnknown, reason) {
+  console.log(`⏭️[VIDEO] Skipping video post (${reason}).`);
+  await setNotFoundMetadata(image, sourceUrl, searchTag, markUnknown, ['meta:video']);
 }
 
 function getSiteName(reverseSearchResult) {
@@ -297,26 +354,51 @@ function getSiteName(reverseSearchResult) {
       results: 5,
     });
 
+    const ffmpegAvailable = await hasFfmpeg();
+    console.log(ffmpegAvailable
+      ? 'Videos: extracting frames with ffmpeg'
+      : 'Videos: ffmpeg not found - video posts will be skipped');
+
     let subsequentErrors = 0;
+    let lastErrorPostId = null;
+    let done = false;
+    let image = null;
+    let publicUrl = null;
+
     while (true) {
       try {
         console.log('-'.repeat(20));
-        const image = await fetchImageWithTag(searchTag);
+        image = null;
+        publicUrl = null;
+        image = await fetchImageWithTag(searchTag);
 
         if (!image) {
           console.log('No more images to process with tag', searchTag);
+          done = true;
           break;
         }
 
         console.log('Image fetched:', image.id);
-        const ext = compress ? 'webp' : image.ext;
+        const isVideo = VIDEO_EXTS.includes((image.ext || '').toLowerCase());
+        const ext = isVideo ? (compress ? 'webp' : 'jpg') : (compress ? 'webp' : image.ext);
         const tempImagePath = `/tmp/${image.hash}.${ext}`;
         const url = `${SHIMMIE_ENDPOINT}${image.image_link}`;
         image.tags = append ? [...image.tags, ...addTags] : addTags;
 
-        let publicUrl = url;
+        publicUrl = url;
         let processorSuccess = false;
         let reverseSearchResults = [];
+
+        const ensureLocalCopy = async () => {
+          if (fs.existsSync(tempImagePath)) {
+            return true;
+          }
+          if (isVideo) {
+            return extractVideoFrame(url, tempImagePath);
+          }
+          await downloadImage(url, tempImagePath, compress);
+          return true;
+        };
 
         if (image.source && image.source.startsWith('http')) {
           const danbooru = processors.find(p => p.name === 'danbooru');
@@ -337,16 +419,33 @@ function getSiteName(reverseSearchResult) {
         }
 
         if (!processorSuccess) {
+          if (isVideo && !ffmpegAvailable) {
+            await skipVideoPost(image, image.source || url, searchTag, markUnknown, 'ffmpeg not available');
+            subsequentErrors = 0;
+            continue;
+          }
+
           if (upload) {
-            await downloadImage(url, tempImagePath, compress);
-            console.log('✅Image downloaded successfully:', tempImagePath);
+            if (!await ensureLocalCopy()) {
+              await skipVideoPost(image, image.source || url, searchTag, markUnknown, 'no frame could be extracted');
+              subsequentErrors = 0;
+              continue;
+            }
+            console.log('✅Image ready:', tempImagePath);
 
             const chibisafeUrl = await uploadToChibisafe(tempImagePath);
             console.log('✅Image uploaded to Chibisafe:', chibisafeUrl);
             publicUrl = chibisafeUrl;
           }
 
-          reverseSearchResults = await sagiriClient(publicUrl);
+          // SauceNAO cannot read a video URL, so without --upload there is no frame
+          if (isVideo && !upload) {
+            console.log('⏭️Reverse search skipped: video posts need --upload to share a frame.');
+          }
+          else {
+            reverseSearchResults = await sagiriClient(publicUrl);
+          }
+
           const fittingResults = reverseSearchResults
             .filter(result => result.similarity > MAX_SIMILARITY && processors.some(p => p.index === result.index))
             .sort((a, b) => a.index - b.index);
@@ -401,8 +500,10 @@ function getSiteName(reverseSearchResult) {
             }
             else {
               console.log('⏳No high similarity results found. Attempting AI interrogation...');
-              if (!fs.existsSync(tempImagePath)) {
-                await downloadImage(url, tempImagePath, compress);
+              if (!await ensureLocalCopy()) {
+                await skipVideoPost(image, image.source || url, searchTag, markUnknown, 'no frame could be extracted');
+                subsequentErrors = 0;
+                continue;
               }
 
               const metadata = await interrogateImage(tempImagePath);
@@ -430,21 +531,41 @@ function getSiteName(reverseSearchResult) {
       } catch (error) {
         console.error('❌Error:', error);
 
-        subsequentErrors++;
-        if (subsequentErrors > 1) {
-          await setErrorMetadata(image, publicUrl, searchTag);
-          console.log('❌Error metadata set for the image. Marking it as error to avoid repeated failures.');
+        const sameImage = image && image.post_id === lastErrorPostId;
+        const blameImage = image && (error instanceof PostError || sameImage);
+        lastErrorPostId = image ? image.post_id : null;
+
+        let marked = false;
+        if (blameImage) {
+          try {
+            await setErrorMetadata(image, publicUrl, searchTag, error.extraTags || []);
+            console.log('❌Error metadata set for the image. Marking it as error to avoid repeated failures.');
+            marked = true;
+          } catch (markError) {
+            console.error('❌Could not mark the image as errored:', markError.message);
+          }
         }
 
-        if (subsequentErrors >= 3) {
-          console.error('❌Too many subsequent errors. Please check the logs above for more information. Exiting...');
-          break;
+        if (marked) {
+          subsequentErrors = 0;
+          lastErrorPostId = null;
         }
+        else {
+          subsequentErrors++;
 
-        console.log(`Retrying in 5 seconds (${subsequentErrors}/3)...`);
+          if (subsequentErrors >= 3) {
+            console.error('❌Too many subsequent errors. Please check the logs above for more information. Exiting...');
+            done = true;
+            break;
+          }
+
+          console.log(`Retrying in 5 seconds (${subsequentErrors}/3)...`);
+        }
+      } finally {
+        if (!done) {
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
       }
-
-      await new Promise(resolve => setTimeout(resolve, 5000));
     }
   } catch (error) {
     console.error('❌Error:', error);
