@@ -1,6 +1,6 @@
 // Node's global fetch identifies itself as "User-Agent: node", which Cloudflare
 // challenges. Identifying the client properly is enough to get through.
-export const USER_AGENT = 'metamaster/1.2 (+https://github.com/madebynoxc/metamaster)';
+export const USER_AGENT = 'metamaster/1.4 (+https://github.com/madebynoxc/metamaster)';
 
 export function booruFetch(url, options = {}) {
   return fetch(url, {
