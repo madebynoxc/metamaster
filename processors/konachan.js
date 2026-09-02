@@ -1,3 +1,5 @@
+import { booruFetch } from '../http.js';
+
 const KONACHAN_URL = 'https://konachan.com/post.json';
 const NAME = 'konachan';
 const INDEX = 26;
@@ -6,7 +8,7 @@ async function fetchMetadata(url) {
     try {
         const konachanId = url.split('/').pop();
         const apiUrl = `${KONACHAN_URL}?tags=id:${konachanId}`;
-        const res = await fetch(apiUrl);
+        const res = await booruFetch(apiUrl);
         const metadata = (await res.json())[0];
 
         const postTags = metadata.tags.split(' ').filter(Boolean);

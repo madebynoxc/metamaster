@@ -7,4 +7,4 @@ const files = readdirSync(__dirname).filter(file => file.endsWith(".js") && file
 
 const imports = await Promise.all(files.map(file => import(join(__dirname, file))));
 
-export default imports.map(module => module.default);
+export default imports.map(module => module.default).filter(Boolean);

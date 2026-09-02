@@ -1,3 +1,5 @@
+import { booruFetch } from '../http.js';
+
 const GELBOORU_URL = 'https://gelbooru.com/index.php';
 const NAME = 'gelbooru';
 const INDEX = 25;
@@ -37,7 +39,7 @@ async function fetchMetadata(url) {
             apiUrl += `&user_id=${userId}&api_key=${apiKey}`;
         }
 
-        const res = await fetch(apiUrl);
+        const res = await booruFetch(apiUrl);
         const data = await res.json();
 
         if (!data.post) {

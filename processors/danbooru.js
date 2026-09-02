@@ -1,3 +1,5 @@
+import { fetchJson } from '../http.js';
+
 const DANBOORU_URL = 'https://danbooru.donmai.us/posts';
 const NAME = 'danbooru';
 const INDEX = 9;
@@ -38,12 +40,11 @@ async function fetchMetadata(url) {
             apiUrl = `${DANBOORU_URL}/${booruId}.json?login=${login}&api_key=${key}`;
         }
         
-        const res = await fetch(apiUrl);
-        const metadata = await res.json();
+        const metadata = await fetchJson(apiUrl);
         return extractMetadata(metadata);
     }
     catch (error) {
-        console.error('[DANBOORU] Error fetching metadata:', error);
+        console.error('[DANBOORU] Error fetching metadata:', error.message);
         return null;
     }
 };
@@ -59,8 +60,7 @@ async function searchBySource(sourceUrl) {
             apiUrl += `&login=${login}&api_key=${key}`;
         }
         
-        const res = await fetch(apiUrl);
-        const results = await res.json();
+        const results = await fetchJson(apiUrl);
 
         if (Array.isArray(results) && results.length > 0) {
             return extractMetadata(results[0]);
@@ -68,7 +68,7 @@ async function searchBySource(sourceUrl) {
         return null;
     }
     catch (error) {
-        console.error('[DANBOORU] Error searching by source:', error);
+        console.error('[DANBOORU] Error searching by source:', error.message);
         return null;
     }
 }

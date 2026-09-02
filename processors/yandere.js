@@ -1,3 +1,5 @@
+import { booruFetch } from '../http.js';
+
 const YANDERE_URL = 'https://yande.re/post.json';
 const NAME = 'yandere';
 const INDEX = 12;
@@ -6,7 +8,7 @@ async function fetchMetadata(url) {
     try {
         const yandereId = url.split('/').pop();
         const apiUrl = `${YANDERE_URL}?tags=id:${yandereId}`;
-        const res = await fetch(apiUrl);
+        const res = await booruFetch(apiUrl);
         const metadata = (await res.json())[0];
 
         const postTags = metadata.tags.split(' ').filter(Boolean);
