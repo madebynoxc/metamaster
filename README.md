@@ -14,6 +14,8 @@ After pulling this repository:
 pnpm i
 ```
 
+Optionally install [ffmpeg](https://ffmpeg.org/download.html) if you want video posts to be tagged as well. It is not a package dependency and is not installed by `pnpm i` - see the Video posts section.
+
 Make your own `.env` file from the template (see Environment section for details):
 
 ```sh
@@ -65,6 +67,21 @@ Other is for tagging posts uploaded using https://github.com/madebynoxc/bsky2boo
 - `--overrideSource` - If set, the post source will be overriden. Otherwise, source will be set only if the target post has surce set to null.
 - `--markUnknown` - If set, adds `meta:unknown` to the posts that didn't pass the search similarity, thus not found through SauceNAO. It is useful to have it so the failed posts can be set manually.
 - `--extract` - If set, the scan will not be run, instead if will use processors to parse specified booru URL and print tags, source and rating so it can be copied and pasted easily to Shimmie.
+
+## Video posts
+
+Videos (`mp4`, `webm`, `mkv`, `mov`, `avi`, `flv`, `m4v`) cannot be reverse searched or interrogated as they are, so MetaMaster uses `ffmpeg` to grab a single frame and runs that frame through the normal workflow. The frame is read straight from the URL, so the whole video is never downloaded. `--compress` applies to the frame the same way it does to an image.
+
+`ffmpeg` is optional. It is detected once at startup and the mode is printed:
+
+```
+Videos: extracting frames with ffmpeg
+Videos: ffmpeg not found - video posts will be skipped
+```
+
+If `ffmpeg` is not installed, or a frame cannot be extracted from a particular video, that post is skipped rather than failed: the search tag is removed and `meta:video` is added, so the run moves on to the next post. Search for `meta:video` later to find them.
+
+Reverse searching a frame needs `--upload`, since SauceNAO cannot read the video URL from your Shimmie. Without it, videos skip the reverse search and go straight to the AI tagger, so `TAGGER_URL` is worth setting if you have a lot of them.
 
 ## Processors
 
