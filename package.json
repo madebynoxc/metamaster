@@ -10,7 +10,7 @@
   "keywords": [],
   "author": "madebynoxc",
   "license": "ISC",
-  "packageManager": "pnpm@10.6.1",
+  "packageManager": "pnpm@10.34.5",
   "type": "module",
   "dependencies": {
     "dotenv": "^16.4.7",
