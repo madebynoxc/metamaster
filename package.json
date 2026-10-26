@@ -1,6 +1,6 @@
 {
   "name": "metamaster",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -14,12 +14,12 @@
   "type": "module",
   "dependencies": {
     "dotenv": "^16.4.7",
-    "form-data": "^4.0.2",
+    "form-data": "^4.0.6",
     "graphql": "^16.10.0",
     "graphql-request": "^7.1.2",
     "node-fetch": "^3.3.2",
     "sagiri": "^4.3.0",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "yargs": "^17.7.2"
   }
 }

@@ -12,6 +12,8 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
+sharp.block({ operation: ['VipsForeignLoadSvg'] });
+
 dotenv.config();
 const SAUCENAO_API_KEY = process.env.SAUCENAO_API_KEY;
 
