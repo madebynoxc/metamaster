@@ -29,10 +29,17 @@ const TAGGER_URL = process.env.TAGGER_URL;
 const TAGGER_MODEL = process.env.TAGGER_MODEL || 'wd-v1-4-moat-tagger.v2';
 const TAGGER_THRESHOLD = parseFloat(process.env.TAGGER_THRESHOLD) || 0.35;
 
+const COOLDOWN_MS = parseInt(process.env.COOLDOWN_MS, 10) || 8000;
+
 const DEFAULT_TAG = 'tagme';
 const VIDEO_EXTS = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'flv', 'm4v'];
 const MAX_SIMILARITY = 80;
 const MIN_SIMILARITY = 40;
+
+const SAUCENAO_BACKOFF_MS = 30000;
+const SAUCENAO_MAX_BACKOFFS = 5;
+const SAUCENAO_SHORT_LIMIT = /Search Rate Too High/i;
+const SAUCENAO_DAILY_LIMIT = /Daily Search Limit Exceeded/i;
 
 const argv = yargs(hideBin(process.argv)).argv
 
@@ -362,6 +369,7 @@ function getSiteName(reverseSearchResult) {
       : 'Videos: ffmpeg not found - video posts will be skipped');
 
     let subsequentErrors = 0;
+    let saucenaoBackoffs = 0;
     let lastErrorPostId = null;
     let done = false;
     let image = null;
@@ -529,9 +537,29 @@ function getSiteName(reverseSearchResult) {
         subsequentErrors = 0;
 
         console.log(`Post link: ${SHIMMIE_ENDPOINT}/post/view/${image.post_id}`);
-        console.log('Cooling down for 5 seconds before processing the next image...');
+        console.log(`Cooling down for ${COOLDOWN_MS / 1000} seconds before processing the next image...`);
       } catch (error) {
         console.error('❌Error:', error);
+
+        if (SAUCENAO_DAILY_LIMIT.test(error.message)) {
+          console.error('❌[SAUCENAO] Daily search limit exceeded. Leaving this post untouched for the next run and exiting...');
+          done = true;
+          break;
+        }
+
+        if (SAUCENAO_SHORT_LIMIT.test(error.message)) {
+          if (++saucenaoBackoffs >= SAUCENAO_MAX_BACKOFFS) {
+            console.error('❌[SAUCENAO] Still rate limited after', SAUCENAO_MAX_BACKOFFS, 'backoffs. Leaving this post untouched for the next run and exiting...');
+            done = true;
+            break;
+          }
+
+          console.log(`⏳[SAUCENAO] Search rate too high. Backing off ${SAUCENAO_BACKOFF_MS / 1000} seconds and retrying this post...`);
+          await new Promise(resolve => setTimeout(resolve, SAUCENAO_BACKOFF_MS));
+          continue;
+        }
+
+        saucenaoBackoffs = 0;
 
         const sameImage = image && image.post_id === lastErrorPostId;
         const blameImage = image && (error instanceof PostError || sameImage);
@@ -565,7 +593,7 @@ function getSiteName(reverseSearchResult) {
         }
       } finally {
         if (!done) {
-          await new Promise(resolve => setTimeout(resolve, 5000));
+          await new Promise(resolve => setTimeout(resolve, COOLDOWN_MS));
         }
       }
     }
